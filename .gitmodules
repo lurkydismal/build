@@ -1,0 +1,9 @@
+[submodule "arhodigp"]
+	path = arhodigp
+	url = https://github.com/lurkydismal/arhodigp.git
+[submodule "logg"]
+	path = logg
+	url = https://github.com/lurkydismal/logg.git
+[submodule "stdfunc"]
+	path = stdfunc
+	url = https://github.com/lurkydismal/stdfunc.git
