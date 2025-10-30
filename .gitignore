@@ -1,0 +1,22 @@
+# Vim
+**/*~
+**/*.swp
+**/.*~
+**/.*.swp
+
+# Profiling
+**/*.gc*
+**/*.info
+**/coverage*
+**/*.prof*
+
+# Binary
+**/*.o
+**/*.tmp
+**/*.a
+**/*.so
+**/**out
+**/*vgcore*
+**/*.data
+**/compile_commands*.json
+**/.cache
