@@ -1,0 +1,74 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+name: C++ CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build on ubuntu-latest
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+    steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+      with:
+        egress-policy: audit
+
+    - name: Checkout repository
+      uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update && \
+        sudo apt-get install -y fd-find libxxhash-dev libmimalloc-dev libmsgsl-dev \
+            build-essential && \
+        sudo ln -sf "$(command -v fdfind)" /bin/fd
+
+    - name: ccache
+      uses: hendrikmuhs/ccache-action@bfa03e1de4d7f7c3e80ad9109feedd05c4f5a716 # v1.2.19
+      with:
+        create-symlink: true
+
+    - name: mold
+      uses: rui314/setup-mold@v1
+
+    - name: Save ccache
+      run: ccache -s
+
+    - name: Build debug
+      run: TERM=xterm ./build.sh -dua
+
+    - name: Build debug with hot reload
+      run: TERM=xterm ./build.sh -deua
+
+    - name: Build tests
+      run: TERM=xterm ./build.sh -tua
+
+    - name: Run tests
+      run: TERM=xterm ./out/main.out_test
