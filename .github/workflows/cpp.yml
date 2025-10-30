@@ -48,7 +48,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update && \
-        sudo apt-get install -y fd-find libxxhash-dev libmimalloc-dev libmsgsl-dev \
+        sudo apt-get install -y fd-find libsnappy-dev libxxhash-dev libmimalloc-dev libmsgsl-dev \
             build-essential && \
         sudo ln -sf "$(command -v fdfind)" /bin/fd
 
