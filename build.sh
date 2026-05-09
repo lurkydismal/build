@@ -34,6 +34,8 @@ export BUILD_DIRECTORY_NAME="out"
 export TESTS_DIRECTORY_NAME="tests"
 export BUILD_DIRECTORY="$SCRIPT_DIRECTORY/$BUILD_DIRECTORY_NAME"
 export TESTS_DIRECTORY="$TESTS_DIRECTORY_NAME"
+export PROFILE_RAW_FILE="${PROFILE_RAW_FILE:-$SCRIPT_DIRECTORY/default.profraw}"
+export PROFILE_DATA_FILE="${PROFILE_DATA_FILE:-$SCRIPT_DIRECTORY/default.profdata}"
 
 export HASH_FUNCTION="sha512sum"
 
@@ -114,8 +116,8 @@ EOF
 
 export BUILD_C_FLAGS="-pipe -std=gnu23 -march=native -ffunction-sections -fdata-sections -fPIC -fopenmp-simd -fno-ident -fno-short-enums -Wall -Wextra -Wno-gcc-compat -Wno-incompatible-pointer-types-discards-qualifiers"
 export BUILD_C_FLAGS_DEBUG="-Og -ggdb3"
-export BUILD_C_FLAGS_RELEASE="-flto=jobserver -fprofile-instr-use -O3 -ffast-math -funroll-loops -fno-asynchronous-unwind-tables"
-export BUILD_C_FLAGS_PROFILE="-fprofile-instr-generate -pg -O3 -ffast-math -funroll-loops -fno-asynchronous-unwind-tables"
+export BUILD_C_FLAGS_RELEASE="-flto=jobserver -fprofile-instr-use=$PROFILE_DATA_FILE -O3 -ffast-math -funroll-loops -fno-asynchronous-unwind-tables"
+export BUILD_C_FLAGS_PROFILE="-fprofile-instr-generate=$PROFILE_RAW_FILE -pg -O3 -ffast-math -funroll-loops -fno-asynchronous-unwind-tables"
 export BUILD_C_FLAGS_TESTS="$BUILD_C_FLAGS_DEBUG -fopenmp -O0"
 export BUILD_C_FLAGS_HOT_RELOAD=""
 
@@ -160,7 +162,7 @@ export BUILD_INCLUDES=()
 export LINK_FLAGS="-fPIC -fuse-ld=mold -Wl,-O1 -Wl,--gc-sections"
 export LINK_FLAGS_DEBUG="-rdynamic"
 export LINK_FLAGS_RELEASE="-flto -s -Wl,--no-eh-frame-hdr"
-export LINK_FLAGS_PROFILE="-Wl,--no-eh-frame-hdr"
+export LINK_FLAGS_PROFILE="-fprofile-instr-generate=$PROFILE_RAW_FILE -Wl,--no-eh-frame-hdr"
 export LINK_FLAGS_TESTS="-fopenmp $LINK_FLAGS_DEBUG"
 export LINK_FLAGS_HOT_RELOAD="-Wl,-rpath,\$ORIGIN"
 
@@ -189,6 +191,24 @@ check_availability() {
     command -v $what >/dev/null 2>&1 || {
         exit_failure "$what"' not found'
     }
+}
+
+prepare_profile_data() {
+    if [ -f "$PROFILE_DATA_FILE" ] && [ ! "$PROFILE_RAW_FILE" -nt "$PROFILE_DATA_FILE" ]; then
+        return
+    fi
+
+    if [ ! -f "$PROFILE_RAW_FILE" ]; then
+        exit_failure "Profile data '$PROFILE_DATA_FILE' not found. Run the profile build executable first to generate '$PROFILE_RAW_FILE'."
+    fi
+
+    check_availability 'llvm-profdata'
+
+    echo -e "$BUILD_TYPE_COLOR""Merging profile data '$PROFILE_RAW_FILE' -> '$PROFILE_DATA_FILE'""$RESET_COLOR"
+
+    llvm-profdata merge \
+        -o "$PROFILE_DATA_FILE" \
+        "$PROFILE_RAW_FILE" || exit_failure "Failed to merge profile data '$PROFILE_RAW_FILE'."
 }
 
 # TODO: Better name
@@ -290,6 +310,8 @@ source './config.sh' && {
     # Release
     elif [ "$BUILD_TYPE" -eq "${BUILD_TYPES[RELEASE]}" ]; then
         echo -e "$BUILD_TYPE_COLOR"'Release build'"$RESET_COLOR"
+
+        prepare_profile_data
 
         BUILD_C_FLAGS="$BUILD_C_FLAGS $BUILD_C_FLAGS_RELEASE"
         BUILD_CPP_FLAGS="$BUILD_CPP_FLAGS $BUILD_CPP_FLAGS_RELEASE"
