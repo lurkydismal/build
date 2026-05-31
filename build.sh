@@ -227,36 +227,29 @@ array_to_string() {
     echo -e "$RESET_COLOR"
 }
 
-clear
 
-cd "$SCRIPT_DIRECTORY" || exit
+# Remove all object files for the selected build type.
+remove_object_files() {
+    # Release
+    if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[RELEASE]}" ]; then
+        fd -I -e o -x rm {}
 
-source './config.sh' && {
-
-    check_availability 'fd'
-
-    mkdir -p "$BUILD_DIRECTORY"
-
-    # Remove all object files
-    {
-        # Release
-        if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[RELEASE]}" ]; then
-            fd -I -e o -x rm {}
+    else
+        if [ ${#staticParts[@]} -ne 0 ]; then
+            printf -v staticPartsAsExcludeString -- "-E %s " "${staticParts[@]}"
 
         else
-            if [ ${#staticParts[@]} -ne 0 ]; then
-                printf -v staticPartsAsExcludeString -- "-E %s " "${staticParts[@]}"
-
-            else
-                staticPartsAsExcludeString=""
-            fi
-
-            fd -I -e o "$staticPartsAsExcludeString" -x rm {}
-
-            unset staticPartsAsExcludeString
+            staticPartsAsExcludeString=""
         fi
-    }
 
+        fd -I -e o "$staticPartsAsExcludeString" -x rm {}
+
+        unset staticPartsAsExcludeString
+    fi
+}
+
+# Add disabled-optimization flags to every build mode when requested.
+disable_optimizations_if_requested() {
     if [ -n "${DISABLE_OPTIMIZATIONS+x}" ]; then
         BUILD_C_FLAGS_DEBUG+=" -O0"
         BUILD_C_FLAGS_RELEASE+=" -O0"
@@ -268,36 +261,39 @@ source './config.sh' && {
         BUILD_CPP_FLAGS_PROFILE+=" -O0"
         BUILD_CPP_FLAGS_TESTS+=" -O0"
     fi
+}
 
-    # Clang-specific flags
-    {
-        BUILD_C_FLAGS+=" -Wno-c23-extensions -Wno-gnu-folding-constant"
-        BUILD_CPP_FLAGS+=" -Wno-c23-extensions -Wno-gnu-folding-constant"
+# Add Clang-specific warnings, coverage flags, and sanitizer flags.
+apply_clang_flags() {
+    BUILD_C_FLAGS+=" -Wno-c23-extensions -Wno-gnu-folding-constant"
+    BUILD_CPP_FLAGS+=" -Wno-c23-extensions -Wno-gnu-folding-constant"
 
-        # Debug or Tests
-        if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[DEBUG]}" ] || [ "$BUILD_TYPE" -eq "${BUILD_TYPES[TESTS]}" ]; then
-            BUILD_C_FLAGS_PROFILE+=" -fprofile-instr-generate -fcoverage-mapping"
-            BUILD_C_FLAGS_TESTS+=" -fprofile-instr-generate -fcoverage-mapping"
+    # Debug or Tests
+    if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[DEBUG]}" ] || [ "$BUILD_TYPE" -eq "${BUILD_TYPES[TESTS]}" ]; then
+        BUILD_C_FLAGS_PROFILE+=" -fprofile-instr-generate -fcoverage-mapping"
+        BUILD_C_FLAGS_TESTS+=" -fprofile-instr-generate -fcoverage-mapping"
 
-            BUILD_CPP_FLAGS_PROFILE+=" -fprofile-instr-generate -fcoverage-mapping"
-            BUILD_CPP_FLAGS_TESTS+=" -fprofile-instr-generate -fcoverage-mapping"
+        BUILD_CPP_FLAGS_PROFILE+=" -fprofile-instr-generate -fcoverage-mapping"
+        BUILD_CPP_FLAGS_TESTS+=" -fprofile-instr-generate -fcoverage-mapping"
 
-            LINK_FLAGS_PROFILE+=" -fprofile-instr-generate -fcoverage-mapping"
-            LINK_FLAGS_TESTS+=" -fprofile-instr-generate -fcoverage-mapping"
-        fi
+        LINK_FLAGS_PROFILE+=" -fprofile-instr-generate -fcoverage-mapping"
+        LINK_FLAGS_TESTS+=" -fprofile-instr-generate -fcoverage-mapping"
+    fi
 
-        if [ -n "${ENABLE_SANITIZERS+x}" ]; then
-            BUILD_C_FLAGS_DEBUG+=" -fsanitize=address,undefined,leak"
-            BUILD_C_FLAGS_TESTS+=" -fsanitize=address,undefined,leak"
+    if [ -n "${ENABLE_SANITIZERS+x}" ]; then
+        BUILD_C_FLAGS_DEBUG+=" -fsanitize=address,undefined,leak"
+        BUILD_C_FLAGS_TESTS+=" -fsanitize=address,undefined,leak"
 
-            BUILD_CPP_FLAGS_DEBUG+=" -fsanitize=address,undefined,leak"
-            BUILD_CPP_FLAGS_TESTS+=" -fsanitize=address,undefined,leak"
+        BUILD_CPP_FLAGS_DEBUG+=" -fsanitize=address,undefined,leak"
+        BUILD_CPP_FLAGS_TESTS+=" -fsanitize=address,undefined,leak"
 
-            LINK_FLAGS_DEBUG+=" -fsanitize=address,undefined,leak"
-            LINK_FLAGS_TESTS+=" -fsanitize=address,undefined,leak"
-        fi
-    }
+        LINK_FLAGS_DEBUG+=" -fsanitize=address,undefined,leak"
+        LINK_FLAGS_TESTS+=" -fsanitize=address,undefined,leak"
+    fi
+}
 
+# Apply the selected build type flags and defines.
+apply_build_type_flags() {
     # Debug
     if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[DEBUG]}" ]; then
         echo -e "$BUILD_TYPE_COLOR"'Debug build'"$RESET_COLOR"
@@ -336,7 +332,10 @@ source './config.sh' && {
         LINK_FLAGS="$LINK_FLAGS $LINK_FLAGS_TESTS"
         BUILD_DEFINES+=("${BUILD_DEFINES_TESTS[@]}")
     fi
+}
 
+# Apply hot reload flags and defines when hot reload is enabled.
+apply_hot_reload_flags() {
     # Hot reload
     if [ -n "${ENABLE_HOT_RELOAD+x}" ]; then
         echo -e "$BUILD_TYPE_COLOR"'Building with hot reload'"$RESET_COLOR"
@@ -346,7 +345,10 @@ source './config.sh' && {
         LINK_FLAGS="$LINK_FLAGS $LINK_FLAGS_HOT_RELOAD"
         BUILD_DEFINES+=("${BUILD_DEFINES_HOT_RELOAD[@]}")
     fi
+}
 
+# Configure compiler wrappers and verify that the selected compilers are available.
+configure_compilers() {
     # Set COMPILER
     # FIX: Do not hard code COMPILER and detect it
     COMPILER="$CPP_COMPILER"
@@ -364,53 +366,224 @@ source './config.sh' && {
     check_availability $C_COMPILER
     check_availability $CPP_COMPILER
     check_availability $COMPILER
+}
 
+# Generate the compiler define flags string and print it.
+generate_defines() {
     if [ ${#BUILD_DEFINES[@]} -ne 0 ]; then
         printf -v definesAsString -- "-D %s " "${BUILD_DEFINES[@]}"
         echo -e "$DEFINES_COLOR""$definesAsString""$RESET_COLOR"
     fi
+}
+
+# Generate include paths from configured build parts and print them.
+generate_includes() {
+    mapfile -t new_build_includes < <(printf -- "%s/include""\n" "${partsToBuild[@]}" "${staticParts[@]}")
+
+    BUILD_INCLUDES+=("${new_build_includes[@]}")
+
+    if [ -n "$testsMainPackage" ]; then
+        BUILD_INCLUDES+=("$testsMainPackage"'/include')
+    fi
+
+    if [ ${#BUILD_INCLUDES[@]} -ne 0 ]; then
+        printf -v includesAsString -- "-I $SCRIPT_DIRECTORY/%s " "${BUILD_INCLUDES[@]}"
+        echo -en "$INCLUDES_COLOR"
+        printf -- "-I %s " "${BUILD_INCLUDES[@]}"
+        echo -e "$RESET_COLOR"
+    fi
+}
+
+# Resolve pkg-config build and link flags for a list of external libraries.
+resolve_external_libraries() {
+    local -n external_libraries_reference="$1"
+    local build_flags_variable="$2"
+    local link_flags_variable="$3"
+    local external_libraries_as_string
+    local external_libraries_build_flags
+    local external_libraries_link_flags
+
+    if [ ${#external_libraries_reference[@]} -ne 0 ]; then
+        printf -v external_libraries_as_string -- "%s " "${external_libraries_reference[@]}"
+
+        echo -e '\n'"$EXTERNAL_LIBRARIES_COLOR""$external_libraries_as_string""$RESET_COLOR"
+        external_libraries_build_flags="$(pkg-config --static --cflags "$external_libraries_as_string")"' '
+
+        SEARCH_STATUS=$?
+
+        if [ $SEARCH_STATUS -ne 0 ]; then
+            exit $SEARCH_STATUS
+        fi
+
+        printf -v "$build_flags_variable" -- "%s" "$external_libraries_build_flags"
+        echo -e "$INCLUDES_COLOR""${!build_flags_variable}""$RESET_COLOR"
+        external_libraries_link_flags="$(pkg-config --static --libs "$external_libraries_as_string")"' '
+
+        SEARCH_STATUS=$?
+
+        if [ $SEARCH_STATUS -ne 0 ]; then
+            exit $SEARCH_STATUS
+        fi
+
+        printf -v "$link_flags_variable" -- "%s" "$external_libraries_link_flags"
+        echo -e "$LIBRARIES_COLOR""${!link_flags_variable}""$RESET_COLOR"
+    fi
+}
+
+# Remember the hash of an existing archive before it is rebuilt.
+remember_existing_output_hash() {
+    local output_file="$1"
+
+    if [ -f "$BUILD_DIRECTORY/$output_file" ]; then
+        processedFilesHashes["$output_file"]="$($HASH_FUNCTION "$BUILD_DIRECTORY/$output_file" | cut -d ' ' -f1)"
+    fi
+}
+
+# Run build_module.sh for a configured package, either in the foreground or background.
+run_build_module() {
+    local output_file="$1"
+    local package_directory="$2"
+    local c_flags="$3"
+    local cpp_flags="$4"
+    local rebuild_flag="$5"
+    local module_kind="$6"
+    local run_in_background="${7:-}"
+
+    if [ -n "$run_in_background" ]; then
+        OUTPUT_FILE="$output_file" \
+            './build_module.sh' \
+            "$package_directory" \
+            "$c_flags" \
+            "$cpp_flags" \
+            "$definesAsString" \
+            "$includesAsString" \
+            "$rebuild_flag" \
+            "$module_kind" &
+
+        processIDs+=($!)
+    else
+        OUTPUT_FILE="$output_file" \
+            './build_module.sh' \
+            "$package_directory" \
+            "$c_flags" \
+            "$cpp_flags" \
+            "$definesAsString" \
+            "$includesAsString" \
+            "$rebuild_flag" \
+            "$module_kind"
+
+        BUILD_STATUS=$?
+
+        if [ $BUILD_STATUS -ne 0 ]; then
+            exit_failure
+        fi
+    fi
+}
+
+# Wait for all background build processes and fail when any process fails.
+wait_for_processes() {
+    for processID in "${processIDs[@]}"; do
+        wait "$processID"
+
+        processStatuses+=($?)
+    done
+
+    BUILD_STATUS=0
+
+    for processStatus in "${processStatuses[@]}"; do
+        if [[ "$processStatus" -ne 0 ]]; then
+            BUILD_STATUS=$processStatus
+
+            break
+        fi
+    done
+
+    processIDs=()
+    processStatuses=()
+
+    if [ "$BUILD_STATUS" -ne 0 ]; then
+        exit_failure
+    fi
+}
+
+# Check whether an archive should be relinked into a shared object.
+needs_shared_object_relink() {
+    local processed_file="$1"
+    local output_file="$2"
+
+    [ ! -f "$BUILD_DIRECTORY/$output_file" ] || [ "$($HASH_FUNCTION "$BUILD_DIRECTORY/$processed_file" | cut -d ' ' -f1)" != "${processedFilesHashes["$processed_file"]}" ]
+}
+
+# Link an archive into a shared object and track the background linker process.
+link_shared_object_from_archive() {
+    local processed_file="$1"
+    local output_file="$2"
+    local message_prefix="$3"
+    local change_to_build_directory="${4:-}"
+
+    echo "Linking $message_prefix$output_file"
+
+    if [ -n "$change_to_build_directory" ]; then
+        cd "$BUILD_DIRECTORY" || exit_failure
+    fi
+
+    $COMPILER -shared -nostdlib $LINK_FLAGS '-Wl,--whole-archive' "$BUILD_DIRECTORY/$processed_file" '-Wl,--no-whole-archive' -o "$BUILD_DIRECTORY/""$output_file" &
+
+    if [ -n "$change_to_build_directory" ]; then
+        cd - >'/dev/null' || exit_failure
+    fi
+
+    export NEED_HOT_RELOAD
+
+    processIDs+=($!)
+}
+
+# Strip sections and section headers from a built executable when requested.
+strip_executable_if_requested() {
+    local executable_name="$1"
+
+    if [ -n "${STRIP_EXECUTABLE+x}" ]; then
+        if [ ${#EXECUTABLE_SECTIONS_TO_STRIP[@]} -ne 0 ]; then
+            printf -v sectionsToStripAsString -- "--remove-section %s " "${EXECUTABLE_SECTIONS_TO_STRIP[@]}"
+            echo -e "$SECTIONS_TO_STRIP_COLOR""$sectionsToStripAsString""$RESET_COLOR"
+        fi
+
+        objcopy "$BUILD_DIRECTORY/$executable_name" $sectionsToStripAsString
+
+        strip --strip-section-headers "$BUILD_DIRECTORY/$executable_name"
+    fi
+}
+
+clear
+
+cd "$SCRIPT_DIRECTORY" || exit
+
+source './config.sh' && {
+
+    check_availability 'fd'
+
+    mkdir -p "$BUILD_DIRECTORY"
+
+    # Remove all object files
+    remove_object_files
+
+    disable_optimizations_if_requested
+
+    # Clang-specific flags
+    apply_clang_flags
+
+    apply_build_type_flags
+
+    apply_hot_reload_flags
+
+    configure_compilers
+
+    generate_defines
 
     # Generate includes
-    {
-        mapfile -t new_build_includes < <(printf -- "%s/include""\n" "${partsToBuild[@]}" "${staticParts[@]}")
+    generate_includes
 
-        BUILD_INCLUDES+=("${new_build_includes[@]}")
-
-        BUILD_INCLUDES+=("$testsMainPackage"'/include')
-
-        if [ ${#BUILD_INCLUDES[@]} -ne 0 ]; then
-            printf -v includesAsString -- "-I $SCRIPT_DIRECTORY/%s " "${BUILD_INCLUDES[@]}"
-            echo -en "$INCLUDES_COLOR"
-            printf -- "-I %s " "${BUILD_INCLUDES[@]}"
-            echo -e "$RESET_COLOR"
-        fi
-    }
-
-    if [ ${#EXTERNAL_LIBRARIES_TO_LINK[@]} -ne 0 ]; then
-        printf -v externalLibrariesAsString -- "%s " "${EXTERNAL_LIBRARIES_TO_LINK[@]}"
-
-        echo -e '\n'"$EXTERNAL_LIBRARIES_COLOR""$externalLibrariesAsString""$RESET_COLOR"
-        externalLibrariesBuildFlagsAsString="$(pkg-config --static --cflags "$externalLibrariesAsString")"' '
-
-        SEARCH_STATUS=$?
-
-        if [ $SEARCH_STATUS -ne 0 ]; then
-            exit $SEARCH_STATUS
-        fi
-
-        echo -e "$INCLUDES_COLOR""$externalLibrariesBuildFlagsAsString""$RESET_COLOR"
-        externalLibrariesLinkFlagsAsString="$(pkg-config --static --libs "$externalLibrariesAsString")"' '
-
-        SEARCH_STATUS=$?
-
-        if [ $SEARCH_STATUS -ne 0 ]; then
-            exit $SEARCH_STATUS
-        fi
-
-        echo -e "$LIBRARIES_COLOR""$externalLibrariesLinkFlagsAsString""$RESET_COLOR"
-
-        unset externalLibrariesAsString
-    fi
+    resolve_external_libraries EXTERNAL_LIBRARIES_TO_LINK externalLibrariesBuildFlagsAsString externalLibrariesLinkFlagsAsString
 
     processedFiles=()
     processedFilesStatic=()
@@ -435,21 +608,16 @@ source './config.sh' && {
 
             processedFiles+=("$OUTPUT_FILE")
 
-            if [ -f "$BUILD_DIRECTORY/$OUTPUT_FILE" ]; then
-                processedFilesHashes["$OUTPUT_FILE"]="$($HASH_FUNCTION "$BUILD_DIRECTORY/$OUTPUT_FILE" | cut -d ' ' -f1)"
-            fi
+            remember_existing_output_hash "$OUTPUT_FILE"
 
-            OUTPUT_FILE="$OUTPUT_FILE" \
-                './build_module.sh' \
+            run_build_module \
+                "$OUTPUT_FILE" \
                 "$partToBuild" \
                 "$BUILD_C_FLAGS $externalLibrariesBuildFlagsAsString" \
                 "$BUILD_CPP_FLAGS $externalLibrariesBuildFlagsAsString" \
-                "$definesAsString" \
-                "$includesAsString" \
                 "$([ -n "${REBUILD_PARTS+x}" ] && echo 1 || echo 0)" \
-                "module" &
-
-            processIDs+=($!)
+                "module" \
+                "background"
         } || exit_failure
 
         unset FILES_TO_INCLUDE FILES_TO_COMPILE
@@ -478,9 +646,7 @@ source './config.sh' && {
 
                 processedFilesStatic+=("$OUTPUT_FILE")
 
-                if [ -f "$BUILD_DIRECTORY/$OUTPUT_FILE" ]; then
-                    processedFilesHashes["$OUTPUT_FILE"]="$($HASH_FUNCTION "$BUILD_DIRECTORY/$OUTPUT_FILE" | cut -d ' ' -f1)"
-                fi
+                remember_existing_output_hash "$OUTPUT_FILE"
 
                 if [ -z "${REBUILD_STATIC_PARTS+x}" ]; then
                     if [ -f "$BUILD_DIRECTORY/$OUTPUT_FILE" ]; then
@@ -490,17 +656,14 @@ source './config.sh' && {
                     fi
                 fi
 
-                OUTPUT_FILE="$OUTPUT_FILE" \
-                    './build_module.sh' \
+                run_build_module \
+                    "$OUTPUT_FILE" \
                     "$staticPart" \
                     "$BUILD_C_FLAGS $externalLibrariesBuildFlagsAsString" \
                     "$BUILD_CPP_FLAGS $externalLibrariesBuildFlagsAsString" \
-                    "$definesAsString" \
-                    "$includesAsString" \
                     "$([ -n "${REBUILD_STATIC_PARTS+x}" ] && echo 1 || echo 0)" \
-                    "static" &
-
-                processIDs+=($!)
+                    "static" \
+                    "background"
             } || exit_failure
 
             unset FILES_TO_INCLUDE FILES_TO_COMPILE
@@ -513,28 +676,7 @@ source './config.sh' && {
         done
     }
 
-    for processID in "${processIDs[@]}"; do
-        wait "$processID"
-
-        processStatuses+=($?)
-    done
-
-    BUILD_STATUS=0
-
-    for processStatus in "${processStatuses[@]}"; do
-        if [[ "$processStatus" -ne 0 ]]; then
-            BUILD_STATUS=$processStatus
-
-            break
-        fi
-    done
-
-    processIDs=()
-    processStatuses=()
-
-    if [ "$BUILD_STATUS" -ne 0 ]; then
-        exit_failure
-    fi
+    wait_for_processes
 
     # Debug
     if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[DEBUG]}" ] && [ -n "${ENABLE_HOT_RELOAD+x}" ]; then
@@ -548,94 +690,34 @@ source './config.sh' && {
                 fi
             fi
 
-            if [ ! -f "$BUILD_DIRECTORY/$outputFile" ] || [ "$($HASH_FUNCTION "$BUILD_DIRECTORY/$processedFile" | cut -d ' ' -f1)" != "${processedFilesHashes["$processedFile"]}" ]; then
-                echo "Linking static $outputFile"
-
-                $COMPILER -shared -nostdlib $LINK_FLAGS '-Wl,--whole-archive' "$BUILD_DIRECTORY/$processedFile" '-Wl,--no-whole-archive' -o "$BUILD_DIRECTORY/""$outputFile" &
-
-                export NEED_HOT_RELOAD
-
-                processIDs+=($!)
+            if needs_shared_object_relink "$processedFile" "$outputFile"; then
+                link_shared_object_from_archive "$processedFile" "$outputFile" "static "
             fi
         done
 
-        for processID in "${processIDs[@]}"; do
-            wait "$processID"
-
-            processStatuses+=($?)
-        done
-
-        BUILD_STATUS=0
-
-        for processStatus in "${processStatuses[@]}"; do
-            if [[ "$processStatus" -ne 0 ]]; then
-                BUILD_STATUS=$processStatus
-
-                break
-            fi
-        done
-
-        if [ "$BUILD_STATUS" -ne 0 ]; then
-            exit_failure
-        fi
-
-        processIDs=()
-        processStatuses=()
+        wait_for_processes
 
         # Convert to shared objects
         for processedFile in "${processedFiles[@]}"; do
             outputFile="${processedFile%.a}.so"
 
-            if [ ! -f "$BUILD_DIRECTORY/$outputFile" ] || [ "$($HASH_FUNCTION "$BUILD_DIRECTORY/$processedFile" | cut -d ' ' -f1)" != "${processedFilesHashes["$processedFile"]}" ]; then
-                echo "Linking $outputFile"
-
-                cd "$BUILD_DIRECTORY" || exit_failure
-
-                $COMPILER -shared -nostdlib $LINK_FLAGS '-Wl,--whole-archive' "$BUILD_DIRECTORY/$processedFile" '-Wl,--no-whole-archive' -o "$BUILD_DIRECTORY/""$outputFile" &
-
-                cd - >'/dev/null' || exit_failure
-
-                export NEED_HOT_RELOAD
-
-                processIDs+=($!)
+            if needs_shared_object_relink "$processedFile" "$outputFile"; then
+                link_shared_object_from_archive "$processedFile" "$outputFile" "" "change_to_build_directory"
             fi
         done
 
-        for processID in "${processIDs[@]}"; do
-            wait "$processID"
-
-            processStatuses+=($?)
-        done
-
-        BUILD_STATUS=0
-
-        for processStatus in "${processStatuses[@]}"; do
-            if [[ "$processStatus" -ne 0 ]]; then
-                BUILD_STATUS=$processStatus
-
-                break
-            fi
-        done
-
-        if [ "$BUILD_STATUS" -ne 0 ]; then
-            exit_failure
-        fi
-
-        processIDs=()
-        processStatuses=()
+        wait_for_processes
 
         if [ -z "${NEED_HOT_RELOAD+x}" ]; then
             # Link root that will have DT_NEEDED for all shared objects
             source "$rootSharedObjectName/config.sh" && {
                 OUTPUT_FILE="$rootSharedObjectName"'.a'
 
-                OUTPUT_FILE="$OUTPUT_FILE" \
-                    './build_module.sh' \
+                run_build_module \
+                    "$OUTPUT_FILE" \
                     "$rootSharedObjectName" \
                     "$BUILD_C_FLAGS" \
                     "$BUILD_CPP_FLAGS" \
-                    "$definesAsString" \
-                    "$includesAsString" \
                     "$([ -n "${REBUILD_PARTS+x}" ] && echo 1 || echo 0)" \
                     "module"
 
@@ -676,21 +758,13 @@ source './config.sh' && {
             source "$executableMainPackage/config.sh" && {
                 OUTPUT_FILE='lib'"$executableMainPackage"'.a'
 
-                OUTPUT_FILE="$OUTPUT_FILE" \
-                    './build_module.sh' \
+                run_build_module \
+                    "$OUTPUT_FILE" \
                     "$executableMainPackage" \
                     "$BUILD_C_FLAGS $externalLibrariesBuildFlagsAsString" \
                     "$BUILD_CPP_FLAGS $externalLibrariesBuildFlagsAsString" \
-                    "$definesAsString" \
-                    "$includesAsString" \
                     "$([ -n "${REBUILD_PARTS+x}" ] && echo 1 || echo 0)" \
                     "module"
-
-                BUILD_STATUS=$?
-
-                if [ $BUILD_STATUS -ne 0 ]; then
-                    exit_failure
-                fi
             } || exit_failure
 
             unset FILES_TO_INCLUDE FILES_TO_COMPILE
@@ -733,46 +807,13 @@ source './config.sh' && {
                 echo -e "$BUILT_EXECUTABLE_COLOR""$EXECUTABLE_NAME""$RESET_COLOR"
             fi
 
-            if [ -n "${STRIP_EXECUTABLE+x}" ]; then
-                if [ ${#EXECUTABLE_SECTIONS_TO_STRIP[@]} -ne 0 ]; then
-                    printf -v sectionsToStripAsString -- "--remove-section %s " "${EXECUTABLE_SECTIONS_TO_STRIP[@]}"
-                    echo -e "$SECTIONS_TO_STRIP_COLOR""$sectionsToStripAsString""$RESET_COLOR"
-                fi
-
-                objcopy "$BUILD_DIRECTORY/$EXECUTABLE_NAME" $sectionsToStripAsString
-
-                strip --strip-section-headers "$BUILD_DIRECTORY/$EXECUTABLE_NAME"
-            fi
+            strip_executable_if_requested "$EXECUTABLE_NAME"
         fi
     }
 
     # Build tests
     if [ "$BUILD_TYPE" -eq "${BUILD_TYPES[TESTS]}" ]; then
-        if [ ${#EXTERNAL_LIBRARIES_TO_LINK_TESTS[@]} -ne 0 ]; then
-            printf -v externalLibrariesTestsAsString -- "%s " "${EXTERNAL_LIBRARIES_TO_LINK_TESTS[@]}"
-
-            echo -e '\n'"$EXTERNAL_LIBRARIES_COLOR""$externalLibrariesTestsAsString""$RESET_COLOR"
-            externalLibrariesTestsBuildFlagsAsString="$(pkg-config --static --cflags "$externalLibrariesTestsAsString")"' '
-
-            SEARCH_STATUS=$?
-
-            if [ $SEARCH_STATUS -ne 0 ]; then
-                exit $SEARCH_STATUS
-            fi
-
-            echo -e "$INCLUDES_COLOR""$externalLibrariesTestsBuildFlagsAsString""$RESET_COLOR"
-            externalLibrariesTestsLinkFlagsAsString="$(pkg-config --static --libs "$externalLibrariesTestsAsString")"' '
-
-            SEARCH_STATUS=$?
-
-            if [ $SEARCH_STATUS -ne 0 ]; then
-                exit $SEARCH_STATUS
-            fi
-
-            echo -e "$LIBRARIES_COLOR""$externalLibrariesTestsLinkFlagsAsString""$RESET_COLOR"
-
-            unset externalLibrariesTestsAsString
-        fi
+        resolve_external_libraries EXTERNAL_LIBRARIES_TO_LINK_TESTS externalLibrariesTestsBuildFlagsAsString externalLibrariesTestsLinkFlagsAsString
 
         for testToBuild in "${testsToBuild[@]}"; do
             export FILES_TO_INCLUDE=""
@@ -781,17 +822,14 @@ source './config.sh' && {
             source "$testToBuild/$TESTS_DIRECTORY/config.sh" && {
                 OUTPUT_FILE='lib'"$testToBuild"'_test.a'
 
-                OUTPUT_FILE="$OUTPUT_FILE" \
-                    './build_module.sh' \
+                run_build_module \
+                    "$OUTPUT_FILE" \
                     "$testToBuild/$TESTS_DIRECTORY" \
                     "$BUILD_C_FLAGS $externalLibrariesBuildFlagsAsString $externalLibrariesTestsBuildFlagsAsString" \
                     "$BUILD_CPP_FLAGS $externalLibrariesBuildFlagsAsString $externalLibrariesTestsBuildFlagsAsString" \
-                    "$definesAsString" \
-                    "$includesAsString" \
                     "$([ -n "${REBUILD_PARTS+x}" ] && echo 1 || echo 0)" \
-                    "module" &
-
-                processIDs+=($!)
+                    "module" \
+                    "background"
             } || exit_failure
 
             unset FILES_TO_INCLUDE FILES_TO_COMPILE
@@ -803,28 +841,7 @@ source './config.sh' && {
             fi
         done
 
-        for processID in "${processIDs[@]}"; do
-            wait "$processID"
-
-            processStatuses+=($?)
-        done
-
-        BUILD_STATUS=0
-
-        for processStatus in "${processStatuses[@]}"; do
-            if [[ "$processStatus" -ne 0 ]]; then
-                BUILD_STATUS=$processStatus
-
-                break
-            fi
-        done
-
-        if [ "$BUILD_STATUS" -ne 0 ]; then
-            exit_failure
-        fi
-
-        processIDs=()
-        processStatuses=()
+        wait_for_processes
 
         # Build tests main package
         {
@@ -832,21 +849,13 @@ source './config.sh' && {
             export FILES_TO_COMPILE=""
 
             source "$testsMainPackage/config.sh" && {
-                OUTPUT_FILE='lib'"$testsMainPackage"'.a' \
-                    './build_module.sh' \
+                run_build_module \
+                    'lib'"$testsMainPackage"'.a' \
                     "$testsMainPackage" \
                     "$BUILD_C_FLAGS $externalLibrariesBuildFlagsAsString $externalLibrariesTestsBuildFlagsAsString" \
                     "$BUILD_CPP_FLAGS $externalLibrariesBuildFlagsAsString $externalLibrariesTestsBuildFlagsAsString" \
-                    "$definesAsString" \
-                    "$includesAsString" \
                     "$([ -n "${REBUILD_PARTS+x}" ] && echo 1 || echo 0)" \
                     "module"
-
-                BUILD_STATUS=$?
-
-                if [ $BUILD_STATUS -ne 0 ]; then
-                    exit_failure
-                fi
             } || exit_failure
 
             unset FILES_TO_INCLUDE FILES_TO_COMPILE
@@ -883,16 +892,7 @@ source './config.sh' && {
                 echo -e "$BUILT_EXECUTABLE_COLOR""$EXECUTABLE_NAME_TESTS""$RESET_COLOR"
             fi
 
-            if [ -n "${STRIP_EXECUTABLE+x}" ]; then
-                if [ ${#EXECUTABLE_SECTIONS_TO_STRIP[@]} -ne 0 ]; then
-                    printf -v sectionsToStripAsString -- "--remove-section %s " "${EXECUTABLE_SECTIONS_TO_STRIP[@]}"
-                    echo -e "$SECTIONS_TO_STRIP_COLOR""$sectionsToStripAsString""$RESET_COLOR"
-                fi
-
-                objcopy "$BUILD_DIRECTORY/$EXECUTABLE_NAME_TESTS" $sectionsToStripAsString
-
-                strip --strip-section-headers "$BUILD_DIRECTORY/$EXECUTABLE_NAME_TESTS"
-            fi
+            strip_executable_if_requested "$EXECUTABLE_NAME_TESTS"
         }
     fi
 
