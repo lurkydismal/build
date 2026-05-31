@@ -406,7 +406,7 @@ resolve_external_libraries() {
         printf -v external_libraries_as_string -- "%s " "${external_libraries_reference[@]}"
 
         echo -e '\n'"$EXTERNAL_LIBRARIES_COLOR""$external_libraries_as_string""$RESET_COLOR"
-        external_libraries_build_flags="$(pkg-config --static --cflags "$external_libraries_as_string")"' '
+        external_libraries_build_flags="$(pkg-config --static --cflags "${external_libraries_reference[@]}")"' '
 
         SEARCH_STATUS=$?
 
@@ -416,7 +416,7 @@ resolve_external_libraries() {
 
         printf -v "$build_flags_variable" -- "%s" "$external_libraries_build_flags"
         echo -e "$INCLUDES_COLOR""${!build_flags_variable}""$RESET_COLOR"
-        external_libraries_link_flags="$(pkg-config --static --libs "$external_libraries_as_string")"' '
+        external_libraries_link_flags="$(pkg-config --static --libs "${external_libraries_reference[@]}")"' '
 
         SEARCH_STATUS=$?
 
