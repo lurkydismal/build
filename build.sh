@@ -382,7 +382,9 @@ generate_includes() {
 
     BUILD_INCLUDES+=("${new_build_includes[@]}")
 
-    BUILD_INCLUDES+=("$testsMainPackage"'/include')
+    if [ -n "$testsMainPackage" ]; then
+        BUILD_INCLUDES+=("$testsMainPackage"'/include')
+    fi
 
     if [ ${#BUILD_INCLUDES[@]} -ne 0 ]; then
         printf -v includesAsString -- "-I $SCRIPT_DIRECTORY/%s " "${BUILD_INCLUDES[@]}"
