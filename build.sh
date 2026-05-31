@@ -235,16 +235,15 @@ remove_object_files() {
         fd -I -e o -x rm {}
 
     else
-        if [ ${#staticParts[@]} -ne 0 ]; then
-            printf -v staticPartsAsExcludeString -- "-E %s " "${staticParts[@]}"
+        local fd_args=(-I -e o)
 
-        else
-            staticPartsAsExcludeString=""
+        if [ ${`#staticParts`[@]} -ne 0 ]; then
+            for static_part in "${staticParts[@]}"; do
+                fd_args+=(-E "$static_part")
+            done
         fi
 
-        fd -I -e o "$staticPartsAsExcludeString" -x rm {}
-
-        unset staticPartsAsExcludeString
+        fd -I -e o "${fd_args[@]}" -x rm {}
     fi
 }
 
